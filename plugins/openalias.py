@@ -66,7 +66,7 @@ class Plugin(BasePlugin):
     def __init__(self, gui, name):
         BasePlugin.__init__(self, gui, name)
         self._is_available = OA_READY
-        self.print_error('OA_READY is ' + str(OA_READY))
+        self.print_error('[OA] OA_READY is ' + str(OA_READY))
 
     @hook
     def init_qt(self, gui):
@@ -228,7 +228,7 @@ class Plugin(BasePlugin):
             return None
 
     def validate_dnssec(self, url):
-        self.print_error('Checking DNSSEC trust chain for ' + url)
+        self.print_error('[OA] Checking DNSSEC trust chain for ' + url)
         default = dns.resolver.get_default_resolver()
         ns = default.nameservers[0]
         parts = url.split('.')
