@@ -66,7 +66,7 @@ class Plugin(BasePlugin):
     def __init__(self, gui, name):
         BasePlugin.__init__(self, gui, name)
         self._is_available = OA_READY
-        self.print_error('OA_READY is ' + str(OA_READY))
+        self.print_error('[OA] OA_READY is ' + str(OA_READY))
 
     @hook
     def init_qt(self, gui):
@@ -224,7 +224,7 @@ class Plugin(BasePlugin):
             return None
 
     def validate_dnssec(self, url):
-        self.print_error('Checking DNSSEC trust chain for ' + url)
+        self.print_error('[OA] Checking DNSSEC trust chain for ' + url)
         default = dns.resolver.get_default_resolver()
         ns = default.nameservers[0]
         parts = url.split('.')
@@ -234,7 +234,7 @@ class Plugin(BasePlugin):
             query = dns.message.make_query(sub, dns.rdatatype.NS)
             response = dns.query.udp(query, ns, 3)
             if response.rcode() != dns.rcode.NOERROR:
-                self.print_error("query error")
+                self.print_error("[OA] Encountered a DNS query error when checking nameservers for record ")
                 return 0
 
             if len(response.authority) > 0:
@@ -252,22 +252,31 @@ class Plugin(BasePlugin):
                                            want_dnssec=True)
             response = dns.query.udp(query, ns, 3)
             if response.rcode() != 0:
-                self.print_error("query error")
+                self.print_error("[OA] Encountered a DNS query error when checking DNSKEY records")
                 return 0
                 # HANDLE QUERY FAILED (SERVER ERROR OR NO DNSKEY RECORD)
 
             # answer should contain two RRSET: DNSKEY and RRSIG(DNSKEY)
             answer = response.answer
             if len(answer) != 2:
-                self.print_error("answer error", answer)
-                return 0
+                # handle edge-case where the RRSIG isn't included, eg. routers that ignore
+                # the DNSSEC bit
+                query = dns.message.make_query(sub,
+                                               dns.rdatatype.RRSIG,
+                                               want_dnssec=True)
+                response = dns.query.udp(query, ns, 3)
+                rrsig = response.answer
+                if len(rrsig) != 1:
+                    self.print_error("[OA] Failed to retrieve DNSKEY and RRSIG records")
+                    return 0
+                answer.append(rrsig[0])
 
             # the DNSKEY should be self signed, validate it
             name = dns.name.from_text(sub)
             try:
                 dns.dnssec.validate(answer[0], answer[1], {name: answer[0]})
             except dns.dnssec.ValidationFailure:
-                self.print_error("validation error")
+                self.print_error("[OA] The record failed DNSSEC validation")
                 return 0
 
         return 1
