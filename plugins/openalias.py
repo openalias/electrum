@@ -1,5 +1,5 @@
 # Copyright (c) 2014-2015, The Monero Project
-# 
+#
 # All rights reserved.
 
 # This plugin is licensed under the GPL v3 license (see the LICENSE file in the base of
@@ -23,6 +23,7 @@ from PyQt4.QtGui import *
 from PyQt4.QtCore import *
 
 import re
+import random
 
 # Import all of the rdtypes, as py2app and similar get confused with the dnspython
 # autoloader and won't include all the rdatatypes
@@ -47,6 +48,8 @@ try:
     import dns.rdtypes.IN.A
     import dns.rdtypes.IN.AAAA
     from dns.exception import DNSException
+    from dnscrypt import dnscrypt
+    from dnscrypt.dnscrypt import DnscryptException
     OA_READY = True
 except ImportError:
     OA_READY = False
@@ -99,7 +102,8 @@ class Plugin(BasePlugin):
         else:
             return
 
-        data = self.resolve(url)
+        data = self.resolve_dnscrypt(url)
+        #data = self.resolve(url)
 
         if not data:
             self.win.previous_payto_e = url
@@ -243,6 +247,53 @@ class Plugin(BasePlugin):
         self.win.update_history_tab()
         self.win.update_completions()
         self.win.tabs.setCurrentIndex(3)
+
+    def get_dnscrypt_resolver(self):
+        '''Get a resolver to use for DNSCrypt.'''
+        oa_resolvers = ['resolvers.openalias.org', 'resolvers.openalias.li', 'resolvers.openalias.ch', 'resolvers.openalias.se']
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 2.0
+        resolver.lifetime = 2.0
+        try:
+            records = resolver.query(random.choice(oa_resolvers), dns.rdatatype.TXT)
+        except NoAnswer:
+            return 0
+        dnscrypt_resolvers = []
+        for record in records:
+            string = record.to_text()
+            string = string.replace('"', '')
+            ip = string.split(':', 1)[0]
+            port = int(string.split(':', 1)[1].split('=')[0])
+            provider_key = string.split('=')[2].replace(':', '').lower()
+            provider_name = string.split('=')[1]
+            dnscrypt_resolvers.append((ip, port, provider_key, provider_name))
+
+        return random.choice(dnscrypt_resolvers)
+
+    def resolve_dnscrypt(self, url):
+        '''Resolve OpenAlias address using url through DNSCrypt.'''
+        print_msg('[OA] Attempting to resolve OpenAlias data through DNSCrypt for ' + url)
+
+        prefix = 'btc'
+        resolver = self.get_dnscrypt_resolver()
+        try:
+            packet = dnscrypt.query(url, resolver[0], resolver[1], resolver[2], resolver[3], record_type=16)  # 16 is TXT record
+        except DnscryptException, e:
+            QMessageBox.warning(self.win, _('Error'), e.message, _('OK'))
+            return 0
+
+        for answer in packet.answers:
+            string = answer[1:]
+            if string.startswith('oa1:' + prefix):
+                address = self.find_regex(string, r'recipient_address=([A-Za-z0-9]+)')
+                name = self.find_regex(string, r'recipient_name=([^;]+)')
+                if not name:
+                    name = address
+                if not address:
+                    continue
+                return (address, name)
+        QMessageBox.warning(self.win, _('Error'), _('No OpenAlias record found.'), _('OK'))
+        return 0
 
     def resolve(self, url):
         '''Resolve OpenAlias address using url.'''
