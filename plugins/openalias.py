@@ -24,6 +24,7 @@ from PyQt4.QtCore import *
 
 import re
 import random
+import struct
 
 # Import all of the rdtypes, as py2app and similar get confused with the dnspython
 # autoloader and won't include all the rdatatypes
@@ -136,7 +137,7 @@ class Plugin(BasePlugin):
             QMessageBox.warning(self.win, _('Error'), 'Could not load DNSPython libraries, please ensure they are available and/or Electrum has been built correctly', _('OK'))
             return True
 
-        if not self.validate_dnssec(url):
+        if not self.validate_dnssec_dnscrypt(url):
             msgBox = QMessageBox()
             msgBox.setText(_('WARNING: the address ' + address + ' could not be validated via an additional security check, DNSSEC, and thus may not be correct.'))
             msgBox.setInformativeText(_('Do you wish to continue?'))
@@ -206,7 +207,7 @@ class Plugin(BasePlugin):
 
         (address, name) = data
 
-        if not self.validate_dnssec(url):
+        if not self.validate_dnssec_dnscrypt(url):
             msgBox = QMessageBox()
             msgBox.setText(_('WARNING: the address ' + address + ' could not be validated via an additional security check, DNSSEC, and thus may not be correct.'))
             msgBox.setInformativeText("Do you wish to continue?")
@@ -350,7 +351,6 @@ class Plugin(BasePlugin):
         try:
             default = dns.resolver.get_default_resolver()
             ns = default.nameservers[0]
-
             parts = url.split('.')
 
             for i in xrange(len(parts), 0, -1):
@@ -383,6 +383,50 @@ class Plugin(BasePlugin):
 
                 # answer should contain two RRSET: DNSKEY and RRSIG(DNSKEY)
                 answer = response.answer
+                if len(answer) != 2:
+                    return 0
+
+                # the DNSKEY should be self signed, validate it
+                name = dns.name.from_text(sub)
+                try:
+                    dns.dnssec.validate(answer[0], answer[1], {name: answer[0]})
+                except dns.dnssec.ValidationFailure:
+                    return 0
+        except Exception, e:
+            return 0
+        return 1
+
+    def validate_dnssec_dnscrypt(self, url):
+        print_msg('[OA] Checking DNSSEC trust chain for ' + url)
+
+        try:
+            parts = url.split('.')
+            resolver = self.get_dnscrypt_resolver()
+
+            for i in xrange(len(parts), 0, -1):
+                sub = '.'.join(parts[i - 1:])
+
+                packet = dnscrypt.query(sub, resolver[0], resolver[1], resolver[2], resolver[3], record_type=2)
+                (id, f1, f2, nquery, nans, nauth, nadd) = struct.unpack('>HBBHHHH', packet.toBinary()[:12])
+
+                rcode = f2 & 15
+                if rcode != dns.rcode.NOERROR:
+                    return 0
+
+                if nauth == 1:
+                    #Same server is authoritative, don't check again
+                    continue
+
+                packet = dnscrypt.query(sub, resolver[0], resolver[1], resolver[2], resolver[3], record_type=48, return_packet=False)
+                response = dns.message.from_wire(packet[:packet.find('\x00\x00\x00\x80\x00\x00\x00') + 7])
+
+                if response.rcode() != dns.rcode.NOERROR:
+                    # HANDLE QUERY FAILED (SERVER ERROR OR NO DNSKEY RECORD)
+                    return 0
+
+                answer = response.answer
+
+                # answer should contain two RRSET: DNSKEY and RRSIG(DNSKEY)
                 if len(answer) != 2:
                     return 0
 
